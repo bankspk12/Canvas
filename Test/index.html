@@ -1,0 +1,586 @@
+import { useState, useEffect } from "react";
+import { Card, CardContent } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectTrigger,
+  SelectValue,
+  SelectContent,
+  SelectItem
+} from "@/components/ui/select";
+import { format } from "date-fns";
+import { th } from "date-fns/locale"; // Import Thai locale for date-fns
+import {
+  PieChart, // Import PieChart
+  Pie,      // Import Pie
+  Cell,     // Import Cell for pie slices colors
+  Tooltip,
+  ResponsiveContainer,
+  Legend,   // Import Legend
+  LabelList // Import LabelList for labels on slices
+} from "recharts";
+
+// Main ExpenseTracker component
+export default function ExpenseTracker() {
+  // State variables for managing expense input
+  const [amount, setAmount] = useState("");
+  const [category, setCategory] = useState("");
+  const [date, setDate] = useState("");
+
+  // State for storing all expenses
+  // Load expenses from Local Storage on initial render, or default to empty array
+  const [expenses, setExpenses] = useState(() => {
+    try {
+      const storedExpenses = localStorage.getItem("expenses");
+      console.log("Loading from Local Storage. Raw data:", storedExpenses); // Debugging log
+      if (storedExpenses) {
+        // Parse stored data, ensuring dates are re-instantiated as Date objects
+        const parsedExpenses = JSON.parse(storedExpenses).map(expense => ({
+          ...expense,
+          // Convert date string back to Date object.
+          // It's crucial that expense.date is a valid ISO string for new Date() to work.
+          date: new Date(expense.date)
+        }));
+        console.log("Loaded expenses after parsing and date conversion:", parsedExpenses); // Debugging log
+        return parsedExpenses;
+      }
+    } catch (error) {
+      console.error("Failed to parse expenses from local storage:", error);
+      // Fallback to empty array if parsing fails, to prevent app crash
+    }
+    console.log("No expenses found in Local Storage or failed to load, initializing with empty array."); // Debugging log
+    return [];
+  });
+
+  // State variables for managing editing functionality
+  const [editId, setEditId] = useState(null); // ID of the expense being edited
+  const [editAmount, setEditAmount] = useState("");
+  const [editCategory, setEditCategory] = useState("");
+  const [editDate, setEditDate] = useState("");
+
+  // State for filtering summary chart data (daily, monthly, yearly)
+  const [filterType, setFilterType] = useState("daily");
+
+  // State for managing the current page view ("main" or "history")
+  const [page, setPage] = useState("main");
+
+  // State for storing LLM analysis result and loading status
+  const [analysisResult, setAnalysisResult] = useState("");
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+
+  // State for storing cost-saving tips result and loading status
+  const [tipsResult, setTipsResult] = useState("");
+  const [isGeneratingTips, setIsGeneratingTips] = useState(false);
+
+  // Predefined categories for expenses
+  const categories = ["อาหาร", "เดินทาง", "บันเทิง", "ช้อปปิ้ง", "อื่น ๆ"];
+
+  // Colors for the Pie Chart slices
+  const PIE_COLORS = ['#00C49F', '#FFBB28', '#FF8042', '#0088FE', '#AF19FF', '#FF007F', '#A020F0', '#FFD700', '#ADFF2F'];
+
+  // useEffect hook to save expenses to Local Storage whenever 'expenses' state changes
+  useEffect(() => {
+    try {
+      // Convert Date objects to ISO strings before saving to Local Storage
+      // This is necessary because Date objects cannot be directly stringified by JSON.stringify
+      const serializableExpenses = expenses.map(expense => ({
+        ...expense,
+        date: expense.date.toISOString() // Convert Date object to string
+      }));
+      localStorage.setItem("expenses", JSON.stringify(serializableExpenses));
+      console.log("Saved expenses to Local Storage:", serializableExpenses); // Debugging log
+    } catch (error) {
+      console.error("Failed to save expenses to local storage:", error);
+    }
+  }, [expenses]); // Dependency array: runs whenever 'expenses' changes
+
+  // Function to add a new expense
+  const addExpense = () => {
+    // Validate input fields
+    if (!amount || !category || !date) {
+      console.log("กรุณากรอกข้อมูลให้ครบถ้วน"); // Log a message instead of alert
+      return;
+    }
+    const newExpense = {
+      id: Date.now(), // Unique ID for the new expense
+      amount: parseFloat(amount),
+      category,
+      date: new Date(date)
+    };
+    setExpenses([newExpense, ...expenses]); // Add new expense to the beginning of the list
+    // Clear input fields after adding
+    setAmount("");
+    setCategory("");
+    setDate("");
+  };
+
+  // Function to delete an expense by its ID
+  const deleteExpense = (id) => {
+    // Filter out the expense with the given ID
+    setExpenses(expenses.filter(e => e.id !== id));
+  };
+
+  // Function to start editing an expense
+  const startEdit = (expense) => {
+    setEditId(expense.id); // Set the ID of the expense to be edited
+    setEditAmount(expense.amount.toString()); // Populate edit form with current amount
+    setEditCategory(expense.category); // Populate edit form with current category
+    setEditDate(format(expense.date, "yyyy-MM-dd")); // Populate edit form with current date
+    setPage("history"); // Switch to history page to show the edit form
+  };
+
+  // Function to save the edited expense
+  const saveEdit = (id) => {
+    setExpenses(expenses.map(e =>
+      e.id === id ? { ...e, amount: parseFloat(editAmount), category: editCategory, date: new Date(editDate) } : e
+    ));
+    // Reset edit state after saving
+    setEditId(null);
+    setEditAmount("");
+    setEditCategory("");
+    setEditDate("");
+  };
+
+  // Function to cancel editing
+  const cancelEdit = () => {
+    // Reset edit state
+    setEditId(null);
+    setEditAmount("");
+    setEditCategory("");
+    setEditDate("");
+  };
+
+  // Function to calculate total expenses for the current period (daily, monthly, or yearly)
+  const getCurrentPeriodTotal = () => {
+    let periodTotal = 0;
+    const now = new Date(); // Get current date for comparison
+
+    if (filterType === "daily") {
+      const today = format(now, "yyyy-MM-dd");
+      periodTotal = expenses
+        .filter(e => format(e.date, "yyyy-MM-dd") === today)
+        .reduce((sum, e) => sum + e.amount, 0);
+    } else if (filterType === "monthly") {
+      const thisMonth = format(now, "yyyy-MM");
+      periodTotal = expenses
+        .filter(e => format(e.date, "yyyy-MM") === thisMonth)
+        .reduce((sum, e) => sum + e.amount, 0);
+    } else if (filterType === "yearly") {
+      const thisYear = format(now, "yyyy");
+      periodTotal = expenses
+        .filter(e => format(e.date, "yyyy") === thisYear)
+        .reduce((sum, e) => sum + e.amount, 0);
+    }
+    return periodTotal;
+  };
+
+  // Function to prepare data for the Pie Chart based on filter type and category
+  const getPieChartData = () => {
+    let filteredExpenses = expenses;
+    const now = new Date();
+    const today = format(now, "yyyy-MM-dd");
+    const thisMonth = format(now, "yyyy-MM");
+    const thisYear = format(now, "yyyy");
+
+    // Filter expenses based on the selected filterType
+    if (filterType === "daily") {
+      filteredExpenses = expenses.filter(e => format(e.date, "yyyy-MM-dd") === today);
+    } else if (filterType === "monthly") {
+      filteredExpenses = expenses.filter(e => format(e.date, "yyyy-MM") === thisMonth);
+    } else if (filterType === "yearly") {
+      filteredExpenses = expenses.filter(e => format(e.date, "yyyy") === thisYear);
+    }
+
+    // Aggregate expenses by category
+    const summary = {};
+    filteredExpenses.forEach(e => {
+      const category = e.category;
+      if (!summary[category]) summary[category] = 0;
+      summary[category] += e.amount;
+    });
+
+    // Convert summary object to an array suitable for Recharts PieChart
+    return Object.entries(summary).map(([name, value]) => ({ name, value }));
+  };
+
+  // Custom label for Pie Chart slices
+  const renderCustomizedLabel = ({ cx, cy, midAngle, innerRadius, outerRadius, percent, name, value }) => {
+    const radius = innerRadius + (outerRadius - innerRadius) * 0.5;
+    const x = cx + radius * Math.cos(-midAngle * Math.PI / 180);
+    const y = cy + radius * Math.sin(-midAngle * Math.PI / 180);
+
+    return (
+      <text x={x} y={y} fill="black" textAnchor={x > cx ? 'start' : 'end'} dominantBaseline="central" className="text-xs font-bold drop-shadow-lg">
+        {`${name} (${(percent * 100).toFixed(0)}%)`}
+      </text>
+    );
+  };
+
+  // Function to analyze spending habits using Gemini API
+  const analyzeSpendingHabits = async () => {
+    setIsAnalyzing(true);
+    setAnalysisResult(""); // Clear previous result
+    setTipsResult(""); // Clear tips result when analyzing
+
+    const currentPeriodData = getPieChartData(); // Get aggregated data for the current filter type
+    const totalSpent = getCurrentPeriodTotal();
+
+    let periodText = "";
+    if (filterType === "daily") periodText = "วันนี้";
+    else if (filterType === "monthly") periodText = "เดือนนี้";
+    else if (filterType === "yearly") periodText = "ปีนี้";
+
+    let prompt = `วิเคราะห์ข้อมูลรายจ่ายต่อไปนี้ตามหมวดหมู่สำหรับ ${periodText} โดยรวมแล้วใช้ไป ${totalSpent.toFixed(2)} บาท. ให้ข้อมูลเชิงลึกเกี่ยวกับพฤติกรรมการใช้จ่ายของคุณ เน้นหมวดหมู่ที่สำคัญ และเสนอเคล็ดลับสั้นๆ ที่นำไปปฏิบัติได้จริงสำหรับการจัดการค่าใช้จ่าย.
+
+ข้อมูลรายจ่าย:
+`;
+
+    if (currentPeriodData.length === 0) {
+      prompt += "ยังไม่มีข้อมูลรายจ่ายสำหรับช่วงเวลานี้.";
+    } else {
+      currentPeriodData.forEach(item => {
+        prompt += `- ${item.name}: ${item.value.toFixed(2)} บาท\n`;
+      });
+    }
+
+    try {
+      let chatHistory = [];
+      chatHistory.push({ role: "user", parts: [{ text: prompt }] });
+      const payload = { contents: chatHistory };
+      const apiKey = ""; // Leave empty for Canvas to provide
+      const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
+
+      const response = await fetch(apiUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      const result = await response.json();
+      if (result.candidates && result.candidates.length > 0 &&
+          result.candidates[0].content && result.candidates[0].content.parts &&
+          result.candidates[0].content.parts.length > 0) {
+        const text = result.candidates[0].content.parts[0].text;
+        setAnalysisResult(text);
+      } else {
+        setAnalysisResult("ไม่สามารถวิเคราะห์ข้อมูลได้ในขณะนี้ กรุณาลองใหม่อีกครั้ง.");
+        console.error("Gemini API response error:", result);
+      }
+    } catch (error) {
+      console.error("Error calling Gemini API:", error);
+      setAnalysisResult("เกิดข้อผิดพลาดในการเชื่อมต่อกับ AI กรุณาลองใหม่อีกครั้ง.");
+    } finally {
+      setIsAnalyzing(false);
+    }
+  };
+
+  // Function to generate cost-saving tips using Gemini API
+  const generateCostSavingTips = async () => {
+    setIsGeneratingTips(true);
+    setTipsResult(""); // Clear previous result
+    setAnalysisResult(""); // Clear analysis result when generating tips
+
+    const currentPeriodData = getPieChartData(); // Get aggregated data for the current filter type
+    const totalSpent = getCurrentPeriodTotal();
+
+    let periodText = "";
+    if (filterType === "daily") periodText = "วันนี้";
+    else if (filterType === "monthly") periodText = "เดือนนี้";
+    else if (filterType === "yearly") periodText = "ปีนี้";
+
+    let prompt = `จากข้อมูลรายจ่ายต่อไปนี้สำหรับ ${periodText} ซึ่งใช้ไปทั้งหมด ${totalSpent.toFixed(2)} บาท:
+
+ข้อมูลรายจ่าย:
+`;
+
+    if (currentPeriodData.length === 0) {
+      prompt += "ยังไม่มีข้อมูลรายจ่ายสำหรับช่วงเวลานี้.";
+    } else {
+      // Sort data to find top spending categories
+      const sortedData = [...currentPeriodData].sort((a, b) => b.value - a.value);
+      const topCategories = sortedData.slice(0, 3); // Get top 3 categories
+
+      topCategories.forEach(item => {
+        prompt += `- ${item.name}: ${item.value.toFixed(2)} บาท\n`;
+      });
+
+      prompt += `\nโปรดระบุ 2-3 หมวดหมู่ที่มีการใช้จ่ายสูงสุด และให้คำแนะนำที่นำไปปฏิบัติได้จริง 2-3 ข้อสำหรับแต่ละหมวดหมู่เพื่อช่วยประหยัดเงิน. นอกจากนี้ ให้รวมเคล็ดลับทั่วไป 1 ข้อสำหรับการจัดการการเงินโดยรวม.`;
+    }
+
+    try {
+      let chatHistory = [];
+      chatHistory.push({ role: "user", parts: [{ text: prompt }] });
+      const payload = { contents: chatHistory };
+      const apiKey = ""; // Leave empty for Canvas to provide
+      const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
+
+      const response = await fetch(apiUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      const result = await response.json();
+      if (result.candidates && result.candidates.length > 0 &&
+          result.candidates[0].content && result.candidates[0].content.parts &&
+          result.candidates[0].content.parts.length > 0) {
+        const text = result.candidates[0].content.parts[0].text;
+        setTipsResult(text);
+      } else {
+        setTipsResult("ไม่สามารถสร้างเคล็ดลับได้ในขณะนี้ กรุณาลองใหม่อีกครั้ง.");
+        console.error("Gemini API response error for tips:", result);
+      }
+    } catch (error) {
+      console.error("Error calling Gemini API for tips:", error);
+      setTipsResult("เกิดข้อผิดพลาดในการเชื่อมต่อกับ AI กรุณาลองใหม่อีกครั้ง.");
+    } finally {
+      setIsGeneratingTips(false);
+    }
+  };
+
+
+  return (
+    <div className="p-4 space-y-6 min-h-screen font-sans bg-gradient-to-br from-blue-900 via-purple-900 to-indigo-900 text-gray-100">
+      {/* Navigation Buttons */}
+      <div className="flex justify-center space-x-4 mb-6">
+        <Button
+          onClick={() => setPage("main")}
+          className={`px-6 py-3 rounded-full shadow-lg transition-all duration-300 transform hover:scale-105 ${page === "main" ? "bg-gradient-to-r from-blue-500 to-purple-600 text-white" : "bg-gray-800 bg-opacity-50 text-gray-200 border border-purple-500 hover:bg-opacity-70"}`}
+        >
+          บันทึกรายจ่าย & สรุป
+        </Button>
+        <Button
+          onClick={() => setPage("history")}
+          className={`px-6 py-3 rounded-full shadow-lg transition-all duration-300 transform hover:scale-105 ${page === "history" ? "bg-gradient-to-r from-blue-500 to-purple-600 text-white" : "bg-gray-800 bg-opacity-50 text-gray-200 border border-purple-500 hover:bg-opacity-70"}`}
+        >
+          ประวัติ
+        </Button>
+      </div>
+
+      {/* Main Page Content */}
+      {page === "main" && (
+        <>
+          <Card className="max-w-md mx-auto bg-white bg-opacity-10 rounded-3xl shadow-2xl p-6 border border-gray-700 backdrop-blur-sm">
+            <CardContent className="space-y-4">
+              <h2 className="text-3xl font-extrabold text-center text-white mb-6 drop-shadow-md">บันทึกรายจ่าย</h2>
+              <Input
+                placeholder="จำนวนเงิน (บาท)"
+                value={amount}
+                onChange={(e) => setAmount(e.target.value)}
+                type="number"
+                className="rounded-xl border-none bg-white text-gray-900 placeholder-gray-500 focus:ring-2 focus:ring-purple-400 p-3"
+              />
+              <Select value={category} onValueChange={setCategory}>
+                <SelectTrigger className="rounded-xl border-none bg-white text-gray-900 focus:ring-2 focus:ring-purple-400 p-3">
+                  <SelectValue placeholder="เลือกหมวดหมู่" />
+                </SelectTrigger>
+                <SelectContent className="rounded-xl shadow-lg bg-white border border-gray-300 text-gray-900">
+                  {categories.map((cat) => (
+                    <SelectItem key={cat} value={cat} className="hover:bg-blue-100 focus:bg-blue-100 rounded-md">
+                      {cat}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Input
+                type="date"
+                value={date}
+                onChange={(e) => setDate(e.target.value)}
+                className="rounded-xl border-none bg-white text-gray-900 focus:ring-2 focus:ring-purple-400 p-3"
+              />
+              <Button
+                onClick={addExpense}
+                className="w-full bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 text-white font-bold py-3 rounded-xl shadow-lg transition-all duration-300 transform hover:scale-105"
+              >
+                บันทึก
+              </Button>
+            </CardContent>
+          </Card>
+
+          <Card className="max-w-4xl mx-auto p-6 bg-white bg-opacity-10 rounded-3xl shadow-2xl border border-gray-700 backdrop-blur-sm">
+            <h3 className="text-2xl font-extrabold text-center text-white mb-6 drop-shadow-md">สรุปรายจ่าย</h3>
+            <div className="mb-4 flex justify-center">
+              <Select value={filterType} onValueChange={setFilterType}>
+                <SelectTrigger className="w-48 rounded-xl border-none bg-white text-gray-900 focus:ring-2 focus:ring-purple-400 p-3">
+                  <SelectValue placeholder="เลือกประเภทสรุป" />
+                </SelectTrigger>
+                <SelectContent className="rounded-xl shadow-lg bg-white border border-gray-300 text-gray-900">
+                  <SelectItem value="daily" className="hover:bg-blue-100 focus:bg-blue-100 rounded-md">รายวัน</SelectItem>
+                  <SelectItem value="monthly" className="hover:bg-blue-100 focus:bg-blue-100 rounded-md">รายเดือน</SelectItem>
+                  <SelectItem value="yearly" className="hover:bg-blue-100 focus:bg-blue-100 rounded-md">รายปี</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <ResponsiveContainer width="100%" height={300}>
+              <PieChart>
+                <Pie
+                  data={getPieChartData()}
+                  cx="50%"
+                  cy="50%"
+                  labelLine={false}
+                  label={renderCustomizedLabel} // Use custom label renderer
+                  outerRadius={100}
+                  fill="#8884d8"
+                  dataKey="value"
+                >
+                  {getPieChartData().map((entry, index) => (
+                    <Cell key={`cell-${index}`} fill={PIE_COLORS[index % PIE_COLORS.length]} />
+                  ))}
+                </Pie>
+                <Tooltip
+                  formatter={(value) => `${value.toFixed(2)} บาท`}
+                  labelFormatter={(label) => `หมวดหมู่: ${label}`}
+                  contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 20px rgba(0,0,0,0.3)', background: 'rgba(30, 41, 59, 0.9)' }}
+                  labelStyle={{ fontWeight: 'bold', color: '#e2e8f0' }}
+                  itemStyle={{ color: '#a78bfa' }}
+                />
+                <Legend
+                  wrapperStyle={{ color: 'white', fontSize: '14px', marginTop: '20px' }}
+                  formatter={(value) => <span className="text-gray-200">{value}</span>}
+                />
+              </PieChart>
+            </ResponsiveContainer>
+            <div className="mt-6 text-center text-xl font-bold text-white drop-shadow-md">
+              {filterType === "daily" && "รวมวันนี้:"}
+              {filterType === "monthly" && "รวมเดือนนี้:"}
+              {filterType === "yearly" && "รวมปีนี้:"}
+              <span className="text-purple-400">{getCurrentPeriodTotal().toFixed(2)}</span> บาท
+            </div>
+
+            {/* Gemini API Integration: Analyze Spending Habits Button */}
+            <div className="mt-8 text-center space-x-4">
+              <Button
+                onClick={analyzeSpendingHabits}
+                disabled={isAnalyzing || isGeneratingTips}
+                className="px-6 py-3 rounded-full bg-gradient-to-r from-green-400 to-blue-500 hover:from-green-500 hover:to-blue-600 text-white font-bold shadow-lg transition-all duration-300 transform hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {isAnalyzing ? "กำลังวิเคราะห์..." : "✨ วิเคราะห์พฤติกรรมการใช้จ่าย"}
+              </Button>
+              <Button
+                onClick={generateCostSavingTips}
+                disabled={isGeneratingTips || isAnalyzing}
+                className="px-6 py-3 rounded-full bg-gradient-to-r from-purple-400 to-pink-500 hover:from-purple-500 hover:to-pink-600 text-white font-bold shadow-lg transition-all duration-300 transform hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {isGeneratingTips ? "กำลังสร้างเคล็ดลับ..." : "✨ เคล็ดลับประหยัดเงิน"}
+              </Button>
+            </div>
+
+            {/* Display Analysis Result */}
+            {analysisResult && (
+              <Card className="mt-6 p-6 bg-white bg-opacity-15 rounded-3xl shadow-xl border border-purple-500 backdrop-blur-sm">
+                <CardContent className="space-y-4">
+                  <h3 className="text-2xl font-bold text-center text-purple-300">ผลการวิเคราะห์จาก AI</h3>
+                  <p className="text-white whitespace-pre-wrap">{analysisResult}</p>
+                </CardContent>
+              </Card>
+            )}
+
+            {/* Display Cost-Saving Tips Result */}
+            {tipsResult && (
+              <Card className="mt-6 p-6 bg-white bg-opacity-15 rounded-3xl shadow-xl border border-green-500 backdrop-blur-sm">
+                <CardContent className="space-y-4">
+                  <h3 className="text-2xl font-bold text-center text-green-300">เคล็ดลับประหยัดเงินจาก AI</h3>
+                  <p className="text-white whitespace-pre-wrap">{tipsResult}</p>
+                </CardContent>
+              </Card>
+            )}
+          </Card>
+        </>
+      )}
+
+      {/* History Page Content */}
+      {page === "history" && (
+        <Card className="max-w-4xl mx-auto p-6 bg-white bg-opacity-10 rounded-3xl shadow-2xl border border-gray-700 backdrop-blur-sm">
+          <h3 className="text-3xl font-extrabold text-center text-white mb-6 drop-shadow-md">ประวัติการบันทึกรายจ่าย</h3>
+          {/* Edit Form (conditionally rendered) */}
+          {editId && (
+            <Card className="max-w-md mx-auto bg-white bg-opacity-15 rounded-3xl shadow-xl mb-6 p-6 border border-purple-500 backdrop-blur-sm">
+              <CardContent className="space-y-4">
+                <h3 className="text-2xl font-bold text-center text-purple-300">แก้ไขรายจ่าย</h3>
+                <Input
+                  placeholder="จำนวนเงิน"
+                  value={editAmount}
+                  onChange={(e) => setEditAmount(e.target.value)}
+                  type="number"
+                  className="rounded-xl border-none bg-white text-gray-900 placeholder-gray-500 focus:ring-2 focus:ring-purple-400 p-3"
+                />
+                <Select value={editCategory} onValueChange={setEditCategory}>
+                  <SelectTrigger className="rounded-xl border-none bg-white text-gray-900 focus:ring-2 focus:ring-purple-400 p-3">
+                    <SelectValue placeholder="เลือกหมวดหมู่" />
+                  </SelectTrigger>
+                  <SelectContent className="rounded-xl shadow-lg bg-white border border-gray-300 text-gray-900">
+                    {categories.map((cat) => (
+                      <SelectItem key={cat} value={cat} className="hover:bg-blue-100 focus:bg-blue-100 rounded-md">
+                        {cat}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Input
+                  type="date"
+                  value={editDate}
+                  onChange={(e) => setEditDate(e.target.value)}
+                  className="rounded-xl border-none bg-white text-gray-900 focus:ring-2 focus:ring-purple-400 p-3"
+                />
+                <div className="flex justify-end space-x-2 mt-4">
+                  <Button
+                    variant="outline"
+                    onClick={cancelEdit}
+                    className="px-4 py-2 rounded-xl border border-gray-600 text-gray-200 hover:bg-gray-700 hover:bg-opacity-50 transition-colors duration-200"
+                  >
+                    ยกเลิก
+                  </Button>
+                  <Button
+                    onClick={() => saveEdit(editId)}
+                    className="px-4 py-2 rounded-xl bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 text-white font-semibold transition-all duration-300 transform hover:scale-105"
+                  >
+                    บันทึก
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* List of Expenses */}
+          <div className="space-y-3">
+            {expenses.length === 0 ? (
+              <p className="text-center text-gray-400 text-lg py-8">ยังไม่มีรายการรายจ่าย</p>
+            ) : (
+              expenses.map((e) => (
+                <div
+                  key={e.id}
+                  className="flex flex-col sm:flex-row justify-between items-start sm:items-center bg-white rounded-xl p-4 shadow-lg hover:shadow-xl transition-shadow duration-200"
+                >
+                  <div className="mb-2 sm:mb-0">
+                    <div className="font-semibold text-xl text-gray-900">{e.category}</div>
+                    <div className="text-gray-700 text-sm">{format(e.date, "dd MMMMyyyy", { locale: th })}</div>
+                  </div>
+                  <div className="flex items-center space-x-3 sm:space-x-4 w-full sm:w-auto justify-between sm:justify-end">
+                    <div className="font-bold text-2xl text-purple-600">{e.amount.toFixed(2)} ฿</div>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => startEdit(e)}
+                      className="px-3 py-1 rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition-colors duration-200"
+                    >
+                      แก้ไข
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="destructive"
+                      onClick={() => deleteExpense(e.id)}
+                      className="px-3 py-1 rounded-lg bg-red-600 text-white hover:bg-red-700 transition-colors duration-200"
+                    >
+                      ลบ
+                    </Button>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </Card>
+      )}
+    </div>
+  );
+}
